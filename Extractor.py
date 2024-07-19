@@ -7,7 +7,7 @@ from fuzzywuzzy import fuzz
 import re
 from datetime import datetime, timezone
 import requests
-
+from transformers import pipeline
 
 load_dotenv()
 
@@ -22,6 +22,8 @@ class JobApplicationReply:
         self.dict_of_content = {}
         self.results = []  # Initialize results list
         self.processed_emails = 0
+    
+    
     def find_reply(self):
         assert self.result == 'OK', 'Error searching Inbox'
         email_ids = self.data[0].split()
@@ -43,7 +45,7 @@ class JobApplicationReply:
                 print("Found job application reply")
                 if sender_email not in self.dict_of_content:
                     self.dict_of_content[sender_email] = []
-                first_line = content.split('\n')[0].strip()
+                first_line = content
                 self.dict_of_content[sender_email].append(first_line)
             self.results.append(num)  # Add processed email to results
         self.mail.close()
@@ -53,14 +55,22 @@ class JobApplicationReply:
     def extract_email_address(self, from_field):
         return from_field.split("<")[-1].strip(">")
 
-    def decode_email(self, msg):
+    def decode_email(self, msg, max_len= 1024):
+        
+        
         try:
             if msg.is_multipart():
                 for part in msg.walk():
                     if part.get_content_type() == "text/plain":
-                        return part.get_payload(decode=True).decode()
+                        payload = part.get_payload(decode=True).decode()
+                        if len(payload) > max_len:
+                            payload = payload[:max_len]
+                        return payload
             else:
-                return msg.get_payload(decode=True).decode()
+                payload = msg.get_payload(decode=True).decode()
+                if len(payload) > max_len:
+                    payload = payload[:max_len]
+                return payload
         except Exception as e:
             print(f"Error decoding email: {e}")
         return None
@@ -93,20 +103,30 @@ class JobApplicationReply:
                 print(f"Found pattern: {pattern}")
         print(f"Score: {score}")
         
-        return score >= 3
+        return score >= 1
+    
+    def summarize_email(self, email_content):
+        summarizer = pipeline("summarization")
+        summary = summarizer(email_content, max_length=20, min_length=10, do_sample=False)
+        return summary[0]['summary_text']
+
+
+
 
     def assamble_payload(self):
         payload = []
         content = self.find_reply()
         for sender_email, content in content.items():   
+            
+            print("-----------------------------------")
             print(content)
+            print("-----------------------------------")
             payload.append({
-        "Email ": {"title": [{"text": {"content": sender_email}}]},  # Korrigiere Feldname und Typ
-        "Resume": {"rich_text": [{"text": {"content": content[0]}}]},
-        "Tags": {"multi_select": [{"name": "diese"}]},  # Korrigiere Feldname und Typ
-        "Date": {"date": {"start":  datetime.now().astimezone(timezone.utc).isoformat()
-, "end": None}}  
-    })
+                "Email ": {"title": [{"text": {"content": sender_email}}]},  
+                "Resume": {"rich_text": [{"text": {"content": self.summarize_email(content)}}]},
+                "Tags": {"multi_select": [{"name": "diese"}]},  
+                "Date": {"date": {"start":  datetime.now().astimezone(timezone.utc).isoformat(), "end": None}}  
+            })  
         return payload
 
 
@@ -144,20 +164,21 @@ class NotionAPI:
         return response
         
 
+
 if __name__ == '__main__':
     NOTION_TOKEN = os.getenv('NOTION_TOKEN')
     NOTION_DATABASE_ID = os.getenv('NOTION_DB_TOKE')
 
-    print(NOTION_TOKEN, NOTION_DATABASE_ID)
+
     napi = NotionAPI(NOTION_TOKEN, NOTION_DATABASE_ID)
     pages = napi.get_pages()
     
         
 
-    # Email = "test_email"
-    # Resume = "test_title"
-    # tag = "diese"
-    # published_date = datetime.now().astimezone(timezone.utc).isoformat()
+    Email = "test_email"
+    Resume = "test_title"
+    tag = "diese"
+    published_date = datetime.now().astimezone(timezone.utc).isoformat()
 
     # data = {
     #     "Email ": {"title": [{"text": {"content": Email}}]},  # Korrigiere Feldname und Typ
@@ -174,4 +195,4 @@ if __name__ == '__main__':
     for reply in replies:
         response = napi.create_page(reply)
         print(response.json())
-        
+    
